@@ -17,19 +17,31 @@ type Distribution struct {
 // node represents a node in a Huffman tree which is either a resolved leaf node representing a
 // value or some node on the path to a child
 type node struct {
-	l     *node
-	r     *node
-	val   byte   // Value that this node represents
-	cnt   uint64 // Frequency of val
-	index int
+	l   *node
+	r   *node
+	val byte   // Value that this node represents
+	cnt uint64 // Frequency of val
+}
+
+type code struct {
+	path byte   // Huffman encoding of the path to the value node in a tree
+	len  uint32 // The number of bits that this encoding takes up
+}
+
+func (c code) String() string {
+	buf := make([]byte, 0)
+	for n, left := c.path, c.len; left > 0; n, left = n/2, left-1 {
+		buf = append(buf, '0'+(n%2))
+	}
+	return string(buf)
 }
 
 type nodeHeap []*node
 
 type Writer struct {
-	w           io.Writer
-	root        *node          // Root of the Huffman tree
-	mapping     *map[byte]byte // Mapping from byte values to their Huffman binary representation
+	io.Writer
+	root        *node         // Root of the Huffman tree
+	mapping     map[byte]code // Mapping from byte values to their Huffman binary representation
 	wroteHeader bool
 }
 
@@ -55,13 +67,13 @@ func (d *Distribution) Of(b byte) float64 {
 }
 
 // toHeap returns a min heap minimizing over the node's count of values.
-func (d *Distribution) toHeap() nodeHeap {
+func (d *Distribution) toHeap() *nodeHeap {
 	nodes := make(nodeHeap, 0)
 	for val, cnt := range d.cnts {
 		nodes = append(nodes, &node{val: val, cnt: cnt})
 	}
 	heap.Init(&nodes)
-	return nodes
+	return &nodes
 }
 
 func (d *Distribution) String() string {
@@ -84,40 +96,62 @@ func (h nodeHeap) Less(i, j int) bool {
 
 func (h nodeHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
-	h[i].index, h[j].index = h[j].index, h[i].index
+
 }
 
 func (h *nodeHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
 	item := old[n-1]
-	item.index = -1
 	*h = old[0 : n-1]
 	return item
 }
 
 func (h *nodeHeap) Push(val interface{}) {
-	n := len(*h)
 	item := val.(*node)
-	item.index = n
 	*h = append(*h, item)
 }
 
 // buildTree constructs a Huffman tree from the min heap of byte value nodes.
-func (h nodeHeap) buildTree() (root *node) {
-	if len(h) >= 1 {
-		for len(h) >= 2 {
-			r, l := h.Pop().(node), h.Pop().(node)
+func (h *nodeHeap) buildTree() (root *node) {
+	if len(*h) >= 1 {
+		for len(*h) >= 2 {
+			l, r := heap.Pop(h).(*node), heap.Pop(h).(*node)
 			next := &node{
 				cnt: r.cnt + l.cnt,
 			}
-			next.l, next.r = &l, &r
-			h.Push(next)
+			next.l, next.r = l, r
+			heap.Push(h, next)
 		}
-		last := h.Pop().(node)
-		root = &last
+		last := heap.Pop(h).(*node)
+		root = last
 	}
 	return
+}
+
+func getMapping(root *node) map[byte]code {
+	mapping := make(map[byte]code)
+	expandPaths(0, 0, root, mapping)
+	return mapping
+}
+
+func expandPaths(path byte, depth uint32, curr *node, mapping map[byte]code) {
+	if curr != nil {
+		// Node is a child node, add its value to the mapping
+		if curr.l == nil && curr.r == nil {
+			mapping[curr.val] = code{path: path, len: depth}
+		} else {
+			leftPath := path
+			var rightPath byte
+			if depth == 0 {
+				rightPath = path + 1
+			} else {
+				rightPath = path + (2 << (depth - 1))
+			}
+			expandPaths(leftPath, depth+1, curr.l, mapping)
+			expandPaths(rightPath, depth+1, curr.r, mapping)
+		}
+	}
 }
 
 // NewWriter returns a new Writer.
@@ -131,6 +165,8 @@ func (h nodeHeap) buildTree() (root *node) {
 // probabilities have not been specified will result in an error.
 func NewWriter(w io.Writer, d *Distribution) *Writer {
 	h := new(Writer)
+	h.Writer = w
 	h.root = d.toHeap().buildTree()
+	h.mapping = getMapping(h.root)
 	return h
 }

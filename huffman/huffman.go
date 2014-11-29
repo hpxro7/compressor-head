@@ -74,14 +74,63 @@ func (d *Distribution) String() string {
 	return "dist[" + string(buf[:len(buf)-2]) + "]"
 }
 
+func (h nodeHeap) Len() int {
+	return len(h)
+}
+
+func (h nodeHeap) Less(i, j int) bool {
+	return h[i].cnt < h[j].cnt
+}
+
+func (h nodeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = h[j].index, h[i].index
+}
+
+func (h *nodeHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	item.index = -1
+	*h = old[0 : n-1]
+	return item
+}
+
+func (h *nodeHeap) Push(val interface{}) {
+	n := len(*h)
+	item := val.(*node)
+	item.index = n
+	*h = append(*h, item)
+}
+
+// buildTree constructs a Huffman tree from the min heap of byte value nodes.
+func (h nodeHeap) buildTree() (root *node) {
+	if len(h) >= 1 {
+		for len(h) >= 2 {
+			r, l := h.Pop().(node), h.Pop().(node)
+			next := &node{
+				cnt: r.cnt + l.cnt,
+			}
+			next.l, next.r = &l, &r
+			h.Push(next)
+		}
+		last := h.Pop().(node)
+		root = &last
+	}
+	return
+}
+
 // NewWriter returns a new Writer.
 // Writes to the returned writer are compressed in accordance to the provided
 // distribution of bytes.
 //
 // It is the caller's responsibility to call Close on the WriterCloser when done.
 // Writes may be buffered and not flushed until Close.
+//
+// The distribution must be completely representative of the data to be written. Writing data whose
+// probabilities have not been specified will result in an error.
 func NewWriter(w io.Writer, d *Distribution) *Writer {
 	h := new(Writer)
-	h.d = *d
+	h.root = d.toHeap().buildTree()
 	return h
 }

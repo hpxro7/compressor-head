@@ -4,6 +4,7 @@ package huffman
 
 import (
 	"container/heap"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -128,6 +129,22 @@ func getMapping(root *node) map[byte]code {
 	return mapping
 }
 
+func decode(curr *node, next func() (byte, error)) (byte, error) {
+	if curr.l == nil && curr.r == nil {
+		return curr.val, nil
+	} else {
+		dir, err := next()
+		if err != nil {
+			return 0, err
+		}
+		if dir == 0 {
+			return decode(curr.l, next)
+		} else {
+			return decode(curr.r, next)
+		}
+	}
+}
+
 func expandPaths(path byte, depth uint32, curr *node, mapping map[byte]code) {
 	if curr != nil {
 		// Node is a child node, add its value to the mapping
@@ -175,22 +192,26 @@ func (w Writer) Write(p []byte) (n int, err error) {
 	encoded := make([]byte, 0)
 	curr := byte(0)
 	left := 8
-	total := 0
 	for i, val := range p {
 		wrote := false
-		c := w.mapping[val]
-		for read, p := uint32(0), c.path; read < c.len; p, read, left = p/2, read+1, left-1 {
-			if read == 0 {
+		c, ok := w.mapping[val]
+		if !ok {
+			return 0, errors.New(fmt.Sprintf("probability of '%c'(%d) was not in distribution", val, val))
+		}
+		for read, p := uint32(0), c.path; read < c.len; p, read = p/2, read+1 {
+			if left == 8 {
 				curr += p % 2
 			} else {
-				curr += (p % 2) * (2 << (read - 1))
+				curr += (p % 2) * (2 << byte(8-left-1))
 			}
 
 			if left == 1 {
-				total++
 				left = 8
 				wrote = true
 				encoded = append(encoded, curr)
+				curr = 0
+			} else {
+				left--
 			}
 		}
 
@@ -199,4 +220,54 @@ func (w Writer) Write(p []byte) (n int, err error) {
 		}
 	}
 	return w.Writer.Write(encoded)
+}
+
+func (w Writer) Huffman() *node {
+	return w.root
+}
+
+type Reader struct {
+	io.Reader
+	root *node // Root of the Huffman tree
+}
+
+func NewReader(r io.Reader, root *node) *Reader {
+	return &Reader{r, root}
+}
+
+//TODO(zac): fix reading extraneous bits at end of stream
+func toBitStream(input []byte) func() (byte, error) {
+	buf := make([]byte, len(input))
+	copy(buf, input)
+	var left byte = 8
+	return func() (next byte, err error) {
+		if len(buf) == 0 {
+			return 0, io.EOF
+		}
+		left--
+		next = buf[0] % 2
+		buf[0] /= 2
+
+		if left == 0 {
+			left = 8
+			buf = buf[1:len(buf)]
+		}
+		return
+	}
+}
+
+func (r Reader) Read(p []byte) (n int, err error) {
+	buf := make([]byte, len(p))
+	n, err = r.Reader.Read(buf)
+	if err != nil {
+		return
+	}
+	n, err = 0, nil
+	stream := toBitStream(buf)
+	for err == nil && n < len(p) {
+		p[n], err = decode(r.root, stream)
+		n++
+	}
+
+	return n, err
 }

@@ -8,21 +8,6 @@ import (
 	"io"
 )
 
-// Distribution stores a probability distribution over input bytes.
-type Distribution struct {
-	cnts  map[byte]uint64
-	total uint64
-}
-
-// node represents a node in a Huffman tree which is either a resolved leaf node representing a
-// value or some node on the path to a child
-type node struct {
-	l   *node
-	r   *node
-	val byte   // Value that this node represents
-	cnt uint64 // Frequency of val
-}
-
 type code struct {
 	path byte   // Huffman encoding of the path to the value node in a tree
 	len  uint32 // The number of bits that this encoding takes up
@@ -36,13 +21,10 @@ func (c code) String() string {
 	return string(buf)
 }
 
-type nodeHeap []*node
-
-type Writer struct {
-	io.Writer
-	root        *node         // Root of the Huffman tree
-	mapping     map[byte]code // Mapping from byte values to their Huffman binary representation
-	wroteHeader bool
+// Distribution stores a probability distribution over input bytes.
+type Distribution struct {
+	cnts  map[byte]uint64
+	total uint64
 }
 
 // NewDistribution returns a new probability distribution over a sample of a stream of bytes.
@@ -85,6 +67,17 @@ func (d *Distribution) String() string {
 	}
 	return "dist[" + string(buf[:len(buf)-2]) + "]"
 }
+
+// node represents a node in a Huffman tree which is either a resolved leaf node representing a
+// value or some node on the path to a child
+type node struct {
+	l   *node
+	r   *node
+	val byte   // Value that this node represents
+	cnt uint64 // Frequency of val
+}
+
+type nodeHeap []*node
 
 func (h nodeHeap) Len() int {
 	return len(h)
@@ -154,6 +147,13 @@ func expandPaths(path byte, depth uint32, curr *node, mapping map[byte]code) {
 	}
 }
 
+type Writer struct {
+	io.Writer
+	root        *node         // Root of the Huffman tree
+	mapping     map[byte]code // Mapping from byte values to their Huffman binary representation
+	wroteHeader bool
+}
+
 // NewWriter returns a new Writer.
 // Writes to the returned writer are compressed in accordance to the provided
 // distribution of bytes.
@@ -161,12 +161,42 @@ func expandPaths(path byte, depth uint32, curr *node, mapping map[byte]code) {
 // It is the caller's responsibility to call Close on the WriterCloser when done.
 // Writes may be buffered and not flushed until Close.
 //
-// The distribution must be completely representative of the data to be written. Writing data whose
-// probabilities have not been specified will result in an error.
+// The distribution must be completely representative of the data to be written. Writing data
+// whose probabilities have not been specified will result in an error.
 func NewWriter(w io.Writer, d *Distribution) *Writer {
 	h := new(Writer)
 	h.Writer = w
 	h.root = d.toHeap().buildTree()
 	h.mapping = getMapping(h.root)
 	return h
+}
+
+func (w Writer) Write(p []byte) (n int, err error) {
+	encoded := make([]byte, 0)
+	curr := byte(0)
+	left := 8
+	total := 0
+	for i, val := range p {
+		wrote := false
+		c := w.mapping[val]
+		for read, p := uint32(0), c.path; read < c.len; p, read, left = p/2, read+1, left-1 {
+			if read == 0 {
+				curr += p % 2
+			} else {
+				curr += (p % 2) * (2 << (read - 1))
+			}
+
+			if left == 1 {
+				total++
+				left = 8
+				wrote = true
+				encoded = append(encoded, curr)
+			}
+		}
+
+		if i == len(p)-1 && !wrote {
+			encoded = append(encoded, curr)
+		}
+	}
+	return w.Writer.Write(encoded)
 }

@@ -231,6 +231,9 @@ type Reader struct {
 	root *node // Root of the Huffman tree
 }
 
+// NewReader creates a new Reader reading from the given reader.
+//
+// It is the callers responsibility to call Close on the Reader when done.
 func NewReader(r io.Reader, root *node) *Reader {
 	return &Reader{r, root}
 }

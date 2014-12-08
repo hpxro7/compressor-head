@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/hpxro7/compressor-head/bits"
 )
 
 type code struct {
@@ -238,27 +240,6 @@ func NewReader(r io.Reader, root *node) *Reader {
 	return &Reader{r, root}
 }
 
-//TODO(zac): fix reading extraneous bits at end of stream
-func toBitStream(input []byte) func() (byte, error) {
-	buf := make([]byte, len(input))
-	copy(buf, input)
-	var left byte = 8
-	return func() (next byte, err error) {
-		if len(buf) == 0 {
-			return 0, io.EOF
-		}
-		left--
-		next = buf[0] % 2
-		buf[0] /= 2
-
-		if left == 0 {
-			left = 8
-			buf = buf[1:len(buf)]
-		}
-		return
-	}
-}
-
 func (r Reader) Read(p []byte) (n int, err error) {
 	buf := make([]byte, len(p))
 	n, err = r.Reader.Read(buf)
@@ -266,7 +247,7 @@ func (r Reader) Read(p []byte) (n int, err error) {
 		return
 	}
 	n, err = 0, nil
-	stream := toBitStream(buf)
+	stream := bits.ToStream(buf)
 	for err == nil && n < len(p) {
 		p[n], err = decode(r.root, stream)
 		n++
